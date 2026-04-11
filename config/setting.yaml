@@ -1,0 +1,42 @@
+app:
+  project_name: "Hierarchical RAG"
+  version: 1.0.0
+  debug: true
+
+llm:
+  provider: "ollama" # "gemini" | "ollama"
+  summary_model: "models/gemini-2.5-flash"
+  rag_model: "models/gemini-2.5-flash"
+  rag_reranker_model: "BAAI/bge-reranker-v2-m3"
+  temperature: 0.7
+
+ollama:
+  base_url: "http://localhost:11434"
+  summary_model: "qwen3:8b"
+  rag_model: "qwen3:8b"
+
+embedding:
+  google: "models/gemini-embedding-001"
+  ollama: "nomic-embed-text"
+
+retrieval:
+  threshold: 0.7
+  top_k: 5
+
+chunking:
+  parent_chunk_size: 2000
+  parent_chunk_overlap: 200
+  child_chunk_size: 200
+  child_chunk_overlap: 50
+
+system_paths:
+  data_dir: "data"
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  log_dir: "logs"
+  vector_db: "storage/vector_db"
+  collection_name: "hierarchical_rag"
+
+langsmith:
+  project: "hierarchical-rag"
+  endpoint: "https://api.smith.langchain.com"

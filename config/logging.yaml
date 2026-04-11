@@ -1,0 +1,50 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s  |%(levelname)-8s|%(name)s  |%(message)s"
+    datefmt: "%Y-%m-%d  |%H:%M:%S"
+  evaluation:
+    format: "%(asctime)s  |%(levelname)-8s|%(name)s  |%(message)s"
+    datefmt: "%Y-%m-%d  |%H:%M:%S"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  general_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    filename: logs/general.log
+    encoding: utf-8
+    formatter: standard
+    backupCount: 5
+    maxBytes: 10485760 # 10 MB
+  
+  evaluation:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    filename: logs/evaluation.log
+    encoding: utf-8
+    formatter: evaluation
+    backupCount: 10
+    maxBytes: 20971520 # 20 MB
+
+loggers:
+  hierachical_rag:
+    level: INFO
+    handlers: [console, general_file]
+    propagate: false
+  
+  hierachical_rag.evaluation:
+    level: DEBUG
+    handlers: [console, general_file]
+    propagate: false
+
+root:
+  level: INFO
+  handlers: [console]
