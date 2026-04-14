@@ -4,13 +4,13 @@ from src.retrieval.vector_db import VectorDBManager
 from src.llm.embeddings import EmbeddingFactory
 
 
-class Retriever:
+class Retriever():
     def __init__(self, provider: str = "ollama"):
         embed_factory = EmbeddingFactory()
-        self.embedding_model = embed_factory.get_embedding(model=provider)
+        self.embedding_model = embed_factory.get_embedding(provider=provider)
 
-        self.vector_db = VectorDBManager(embedding_model=self.embedding_model)
-
+        self.vector_db = VectorDBManager(embedding_model=self.embedding_model, provider=provider)
+    
         logger.info(f"Retriever đã tạo với provider: {provider}")
 
     def retrieval(
@@ -22,7 +22,7 @@ class Retriever:
         logger.info(f"đang tìm kiếm bằng hyde: {hyde}")
         retriever = self.vector_db.get_retriever(collection_name=collection_name, k=k)
         try:
-            docs = retriever.invoke(hyde)
+            docs = retriever.retrieve(hyde)
             logger.info(f"Tìm thấy {len(docs)} tài liệu liên quan.")
             return docs
         except Exception as e:

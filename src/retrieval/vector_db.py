@@ -1,93 +1,224 @@
 from src.core.config import settings
 from src.utils.logger import logger
-from langchain_chroma import Chroma
 import json
 from pathlib import Path
-
+import chromadb
+import shutil
+import os
+import gc
+from llama_index.core import StorageContext, VectorStoreIndex, load_index_from_storage
+from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core.retrievers import RecursiveRetriever
 
 class VectorDBManager:
-    def __init__(self, embedding_model):
+    def __init__(self, embedding_model, provider: str = "ollama"):
         self.embedding_model = embedding_model
-        self.persist_directory = settings.system_paths.vector_db
-        self._vector_store = None
-        self.metadata_path = Path(self.persist_directory).parent / "collection_metadata.json"
+        self.provider = provider.lower()
 
-    def _init_db(self, collection_name: str):
-        if self._vector_store is None:
-            self._vector_store = Chroma(
-                collection_name=collection_name,
-                embedding_function=self.embedding_model,
-                persist_directory=self.persist_directory,
-            )
-        logger.info(f"Đã kết nối tới VectorDB tại: {self.persist_directory}")
+        # Set up storage paths
+        base_dir = Path(__file__).resolve().parents[2] / "storage"
+        self.persist_directory = base_dir / self.provider
+        self.persist_directory.mkdir(parents=True, exist_ok=True)
+        
+        self.summary_path = self.persist_directory / "collection_metadata.json"
+        self._db_client = None
+        self._index = None
 
-    def add_documents(
-        self, documents: list, collection_name: str = "default_collection"
-    ):
-        self._init_db(collection_name)
-        if not documents:
-            logger.warning("Danh sách tài liệu trống, không có gì để lưu.")
-            return []
+    @property
+    def db_client(self):
+        """Initialize and return the ChromaDB client on demand."""
+        if self._db_client is None:
+            self._db_client = chromadb.PersistentClient(path=str(self.persist_directory))
+        return self._db_client
 
-        try:
-            ids = self._vector_store.add_documents(documents)
-            logger.info(f"Đã lưu {len(ids)} chunks vào hệ thống.")
-            return ids
-        except Exception as e:
-            logger.error(f"Lỗi hệ thống khi lưu vào DB: {e}")
-            return []
+    def _get_storage_context(self, collection_name: str):
+        """Get the LlamaIndex StorageContext for a specific collection."""
+        from llama_index.core.storage.docstore import SimpleDocumentStore
+        from llama_index.core.storage.index_store import SimpleIndexStore
+        
+        chroma_collection = self.db_client.get_or_create_collection(collection_name)
+        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 
-    def get_retriever(self, collection_name: str = "default_collection", k: int = 5):
-        self._init_db(collection_name)
-        return self._vector_store.as_retriever(search_kwargs={"k": k})
-
-    def delete_collection(self, collection_name: str = "hierarchical_rag"):
-        """Delete the collection and clear the local vector store instance."""
-        try:
-            # Re-init if not already initialized
-            self._init_db(collection_name)
-            
-            if self._vector_store:
-                self._vector_store.delete_collection()
-                self._vector_store = None
-                logger.info(f"Đã xóa sạch dữ liệu trong collection: {collection_name}")
-        except Exception as e:
-            logger.error(f"Lỗi khi xóa collection: {e}")
+        # Check if we have existing storage files
+        docstore_path = self.persist_directory / "docstore.json"
+        
+        if docstore_path.exists():
+            try:
+                storage_context = StorageContext.from_defaults(
+                    vector_store=vector_store,
+                    persist_dir=str(self.persist_directory),
+                )
+                return storage_context
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load storage context from {self.persist_directory}: {e}")
+        
+        # Initialize new storage context with explicit stores
+        return StorageContext.from_defaults(
+            vector_store=vector_store,
+            docstore=SimpleDocumentStore(),
+            index_store=SimpleIndexStore()
+        )
 
     def reset_db(self):
-        """Physically delete the vector database directory and summary metadata."""
-        import shutil
+        """Completely reset the database to resolve dimension mismatch issues."""
         try:
-            if Path(self.persist_directory).exists():
-                shutil.rmtree(self.persist_directory)
-                logger.info(f"Đã xóa thư mục VectorDB: {self.persist_directory}")
+            # 1. Close connections and release objects
+            self._index = None
+            self._db_client = None
             
-            if self.metadata_path.exists():
-                self.metadata_path.unlink()
-                logger.info(f"Đã xóa file metadata: {self.metadata_path}")
+            gc.collect() # Force garbage collection to release file locks
+
+            if self.persist_directory.exists():
+                shutil.rmtree(self.persist_directory, ignore_errors=True)
+                logger.info(f"🧹 Cleaned up storage directory: {self.persist_directory}")
             
-            self._vector_store = None
+            self.persist_directory.mkdir(parents=True, exist_ok=True)
             return True
         except Exception as e:
-            logger.error(f"Lỗi khi reset VectorDB: {e}")
+            logger.error(f"❌ Failed to reset DB: {e}")
             return False
-            
-    def save_summary(self, collection_name: str, summary: str):
-        """Save a summary for a specific collection to a JSON file."""
-        data = {}
-        if self.metadata_path.exists():
-            with open(self.metadata_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        
-        data[collection_name] = summary
-        with open(self.metadata_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        logger.info(f"Đã lưu tóm tắt cho bộ sưu tập: {collection_name}")
 
-    def get_summary(self, collection_name: str) -> str:
-        """Retrieve the summary for a specific collection."""
-        if self.metadata_path.exists():
-            with open(self.metadata_path, "r", encoding="utf-8") as f:
+    def get_index(self, collection_name: str = "default_collection"):
+        """Load and return the existing index if available."""
+        if self._index is not None:
+            return self._index
+
+        if not (self.persist_directory / "docstore.json").exists():
+            return None
+
+        try:
+            storage_context = self._get_storage_context(collection_name)
+            self._index = load_index_from_storage(
+                storage_context,
+                embed_model=self.embedding_model,
+            )
+            return self._index
+        except Exception:
+            return None
+
+    def add_documents(self, nodes, collection_name: str = "default_collection"):
+        """Add nodes to the index and persist changes."""
+        try:
+            # 1. Deduplicate nodes
+            unique_nodes_dict = {n.node_id: n for n in nodes}
+            unique_input_nodes = list(unique_nodes_dict.values())
+
+            # 2. Load or create index
+            self._index = self.get_index(collection_name)
+
+            if self._index is None:
+                logger.info("🚀 Index doesn't exist or was reset, initializing new index...")
+                storage_context = self._get_storage_context(collection_name)
+
+                self._index = VectorStoreIndex(
+                    nodes=unique_input_nodes,
+                    storage_context=storage_context,
+                    embed_model=self.embedding_model,
+                    show_progress=True,
+                    store_nodes_override=True, # Critical for hierarchical RAG persistence
+                )
+            else:
+                logger.info("➕ Existing index found, checking for new nodes...")
+
+                existing_ids = set(
+                    self._index.storage_context.docstore.docs.keys()
+                )
+
+                final_new_nodes = [
+                    n for n in unique_input_nodes if n.node_id not in existing_ids
+                ]
+
+                if final_new_nodes:
+                    logger.info(f"Inserting {len(final_new_nodes)} new nodes into the DB.")
+                    self._index.insert_nodes(final_new_nodes)
+                else:
+                    logger.info("ℹ️ All nodes already exist in the index.")
+
+            # 3. Persist changes
+            self._index.storage_context.persist(
+                persist_dir=str(self.persist_directory)
+            )
+            logger.info(f"✅ Successfully persisted state at {self.persist_directory}")
+
+            return [n.node_id for n in unique_input_nodes]
+
+        except Exception as e:
+            logger.error(f"❌ Error in add_documents: {e}")
+            raise e
+
+    def get_retriever(
+        self,
+        similarity_top_k: int = 3,
+        collection_name: str = "default_collection",
+        **kwargs,
+    ):
+        """Return a RecursiveRetriever that traverses from leaf nodes to parent nodes."""
+        index = self.get_index(collection_name)
+
+        if index is None:
+            logger.error("❌ Cannot obtain retriever because the index is empty.")
+            return None
+
+        # 1. Fetch all nodes from the docstore to build a lookup mapping
+        all_nodes = list(index.storage_context.docstore.docs.values())
+        nodes_dict = {node.node_id: node for node in all_nodes}
+
+        # 2. Base retriever for leaf node matching
+        vector_retriever = index.as_retriever(similarity_top_k=similarity_top_k, **kwargs)
+
+        # 3. Configure RecursiveRetriever with both the vector retriever and nodes mapping
+        logger.info("Initializing optimized RecursiveRetriever with docstore node mapping...")
+        recursive_retriever = RecursiveRetriever(
+            "vector",
+            retriever_dict={
+                "vector": vector_retriever,
+                **nodes_dict
+            },
+            verbose=True
+        )
+
+        return recursive_retriever
+
+    def save_summary(self, collection_name: str, summary: str):
+        """Append or update a document summary in the metadata storage."""
+        try:
+            data = self.get_summary() # Fetch existing metadata map
+            key = f"{collection_name}_{self.provider}"
+            data[key] = summary
+
+            with open(self.summary_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+
+            logger.info(f"✅ Summary saved successfully to {self.summary_path}")
+
+        except Exception as e:
+            logger.error(f"❌ Error while saving summary: {e}")
+
+    def get_summary(self, collection_name: str = None) -> dict:
+        """
+        Retrieve summary information.
+        - If collection_name is provided: Return summary string/obj for that collection.
+        - Otherwise: Return the entire metadata dictionary.
+        """
+        if not hasattr(self, 'summary_path') or not self.summary_path.exists():
+            return {}
+
+        try:
+            if self.summary_path.stat().st_size == 0:
+                return {}
+
+            with open(self.summary_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get(collection_name, "")
-        return ""
+            
+            if collection_name:
+                key = f"{collection_name}_{self.provider}"
+                return data.get(key, {})
+            
+            return data
+
+        except json.JSONDecodeError:
+            logger.error(f"❌ Metadata file is corrupted (JSON error) at {self.summary_path}")
+            return {}
+        except Exception as e:
+            logger.error(f"❌ Unexpected error while reading summary: {e}")
+            return {}

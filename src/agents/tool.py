@@ -9,13 +9,14 @@ from langgraph.graph import END
 from langgraph.constants import Send
 from typing import List
 
-from langchain_chroma import Chroma
+from llama_index.core.retrievers import AutoMergingRetriever
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 from src.agents.state import AgentState
 from src.core.config import settings
 from src.llm.embeddings import EmbeddingFactory
 from src.llm.factory import LLLMFactory
+from src.retrieval.vector_db import VectorDBManager
 from src.utils.logger import logger
 
 
@@ -23,30 +24,34 @@ from src.utils.logger import logger
 # Singleton instances & Helpers
 # ---------------------------------------------------------------------------
 
-_vector_stores = {}  # Cache: {provider_name: ChromaInstance}
+_indices = {}  # Cache: {provider_name: LlamaIndexInstance}
 _tavily = None       # Lazy initialized
 
 
-def get_vector_store(embedding_provider: str = None):
-    """Get or create a Chroma vector store instance for a specific provider."""
-    # Use config default if not specified in state
+def get_index(embedding_provider: str = None):
+    """Get or load a LlamaIndex index instance for a specific provider."""
     if embedding_provider is None:
-        # Check settings.llm.provider as a hint for embedding if not explicitly set
-        embedding_provider = "google" # Default safe bet for this project
+        embedding_provider = settings.llm.provider.lower()
     
     embedding_provider = embedding_provider.lower()
 
-    if embedding_provider not in _vector_stores:
-        logger.info(f"Initializing VectorStore for provider: {embedding_provider}")
+    if embedding_provider not in _indices:
+        logger.info(f"Loading Index for provider: {embedding_provider}")
+        # Ensure global settings match the provider before loading/creating index
+        LLLMFactory.configure_llama_index_settings(provider=embedding_provider)
+        
         factory = EmbeddingFactory()
         embeddings = factory.get_embedding(provider=embedding_provider)
 
-        _vector_stores[embedding_provider] = Chroma(
-            persist_directory=settings.system_paths.vector_db,
-            embedding_function=embeddings,
-            collection_name=settings.system_paths.collection_name,
-        )
-    return _vector_stores[embedding_provider]
+        db_manager = VectorDBManager(embedding_model=embeddings, provider=embedding_provider)
+        index = db_manager.get_index(collection_name=settings.system_paths.collection_name)
+        
+        if index:
+            _indices[embedding_provider] = index
+        else:
+            return None
+
+    return _indices[embedding_provider]
 
 
 def get_tavily():
@@ -108,7 +113,7 @@ def fan_out_subtasks(state: AgentState) -> List[Send]:
 # ---------------------------------------------------------------------------
 
 def rag_retriever(state: AgentState) -> dict:
-    """Retrieve chunks from ChromaDB. Supports dynamic embedding provider."""
+    """Retrieve chunks from ChromaDB using LlamaIndex AutoMergingRetriever."""
     query = state.get("hyde_query") or state.get("current_task", "")
     current_task = state.get("current_task", "")
     embedding_provider = state.get("embedding_provider")
@@ -116,9 +121,24 @@ def rag_retriever(state: AgentState) -> dict:
     logger.info(f"[RAG] Provider: {embedding_provider} | Query: {query[:50]}...")
 
     try:
-        store = get_vector_store(embedding_provider)
-        docs = store.similarity_search(query, k=settings.retrieval.top_k)
-        retrieved_text = "\n\n".join(doc.page_content for doc in docs) if docs else ""
+        index = get_index(embedding_provider)
+        if not index:
+            raise ValueError(f"Index not found for {embedding_provider}")
+
+        # Initialize AutoMergingRetriever
+        # It searches leaf nodes and automatically merges them into parent nodes if threshold met
+        base_retriever = index.as_retriever(similarity_top_k=settings.retrieval.top_k)
+        retriever = AutoMergingRetriever(
+            base_retriever, 
+            index.storage_context, 
+            verbose=True
+        )
+
+        nodes = retriever.retrieve(query)
+        retrieved_text = "\n\n".join(node.get_content() for node in nodes) if nodes else ""
+        
+        logger.info(f"[RAG] Retrieved {len(nodes)} nodes (merged if applicable)")
+
     except Exception as exc:
         logger.error(f"[RAG] Retrieval failed: {exc}")
         retrieved_text = ""
@@ -126,7 +146,7 @@ def rag_retriever(state: AgentState) -> dict:
     report = _format_subtask_report(
         current_task=current_task,
         result=retrieved_text or "(không tìm thấy dữ liệu liên quan)",
-        source=f"RAG ({embedding_provider or 'default'})",
+        source=f"Hierarchical RAG ({embedding_provider or 'default'})",
     )
     return {
         "all_context": [retrieved_text],

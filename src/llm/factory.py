@@ -6,6 +6,9 @@ from src.llm.providers.gemini_client import GeminiClient
 from src.llm.providers.ollama_client import OllamaClient
 from src.utils.logger import logger
 
+# LlamaIndex Global Settings
+from llama_index.core import Settings
+
 
 class LLLMFactory:
     """Factory for creating pre-configured LLM clients by purpose.
@@ -87,5 +90,49 @@ class LLLMFactory:
         else:
             logger.error(f"Unsupported LLM purpose: '{purpose}'")
             raise ValueError(f"LLM purpose not supported: {purpose}")
+
+    @staticmethod
+    def configure_llama_index_settings(provider: str = None):
+        """Configure LlamaIndex global Settings to use the chosen provider.
+        
+        This prevents LlamaIndex from defaulting to OpenAI for internal tasks.
+        """
+        if provider is None:
+            provider = settings.llm.provider.lower()
+        else:
+            provider = provider.lower()
+            
+        if provider == "google":
+            provider = "gemini"
+            
+        logger.info(f"Configuring LlamaIndex global Settings for: {provider}")
+        
+        if provider == "gemini":
+            from llama_index.llms.google_genai import GoogleGenAI
+            from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+            
+            Settings.llm = GoogleGenAI(
+                model=settings.llm.rag_model,
+                api_key=settings.google_api_key
+            )
+            Settings.embed_model = GoogleGenAIEmbedding(
+                model_name=settings.embedding.google,
+                api_key=settings.google_api_key
+            )
+            
+        elif provider == "ollama":
+            from llama_index.llms.ollama import Ollama
+            from llama_index.embeddings.ollama import OllamaEmbedding
+            
+            Settings.llm = Ollama(
+                model=settings.ollama.rag_model,
+                base_url=settings.ollama.base_url
+            )
+            Settings.embed_model = OllamaEmbedding(
+                model_name=settings.embedding.ollama,
+                base_url=settings.ollama.base_url
+            )
+        
+        logger.info(f"LlamaIndex global Settings updated successfully for {provider}")
 
 

@@ -132,7 +132,7 @@ def build_graph():
     )
 
     # Fan-out: each sub-task runs subtask_runner in parallel
-    g.add_conditional_edges("planner", fan_out_subtasks)
+    g.add_conditional_edges("planner", fan_out_subtasks, ["subtask_runner"])
 
     # Fan-in: all branches meet at global_summary
     g.add_edge("subtask_runner", "global_summary")

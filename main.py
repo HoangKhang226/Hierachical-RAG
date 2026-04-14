@@ -1,4 +1,3 @@
-import os
 import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -9,31 +8,34 @@ from pydantic import BaseModel
 
 from src.core.config import settings
 from src.utils.logger import logger
-from src.processors.pdf_engine import PDFEngine
-from src.processors.chunker import Chunker
+from src.core.orchestrator import IngestionOrchestrator
 from src.llm.embeddings import EmbeddingFactory
 from src.retrieval.vector_db import VectorDBManager
 from src.agents.graph import graph
 from src.llm.factory import LLLMFactory
-from src.prompt.template import CONTEXT_COMPRESSION_PROMPT
 
+# --- Initialize FastAPI App ---
 app = FastAPI(
     title="Hierarchical RAG API",
-    description="Agentic RAG system with multi-provider support (Gemini & Ollama)",
-    version="1.0.0",
+    description="Hierarchical Agentic RAG system supporting multi-platform (Gemini & Ollama)",
+    version="1.1.0",
 )
 
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def startup_event():
+    """Initialize default LlamaIndex settings on startup."""
+    try:
+        LLLMFactory.configure_llama_index_settings()
+        logger.info("Default LlamaIndex settings configured.")
+    except Exception as e:
+        logger.error(f"Failed to set default LlamaIndex settings: {e}")
 
-
+# --- Models ---
 class ChatRequest(BaseModel):
     question: str
     llm_provider: Optional[str] = None
     embedding_provider: Optional[str] = None
     input_data_summary: Optional[str] = ""
-
 
 class IngestResponse(BaseModel):
     status: str
@@ -41,96 +43,46 @@ class IngestResponse(BaseModel):
     chunks_count: int
     collection: str
     summary: str
+    provider: str
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-async def generate_initial_summary(chunks: list, llm_provider: str) -> str:
-    """Generate a concise summary from the first few chunks of the document."""
-    if not chunks:
-        return ""
-
-    # Take first 5 chunks to build a global perspective
-    sample_text = "\n\n".join([c.page_content for c in chunks[:]])
-
-    client = LLLMFactory.create_client("summary", provider=llm_provider)
-    prompt = CONTEXT_COMPRESSION_PROMPT.format(input_data=sample_text)
-
-    try:
-        response = await client.get_llm().ainvoke(prompt)
-        return response.content
-    except Exception as e:
-        logger.error(f"Error generating initial summary: {e}")
-        return "Tóm tắt tài liệu không khả dụng."
-
+# --- Endpoints ---
 
 @app.get("/")
 def root():
     return {
         "message": "Hierarchical RAG API is running",
-        "provider": settings.llm.provider,
+        "project": settings.app.project_name,
+        "version": settings.app.version,
+        "default_provider": settings.llm.provider,
     }
 
+@app.get("/health")
+def health_check():
+    """Check API health status."""
+    return {"status": "healthy", "version": settings.app.version}
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_document(
     file: UploadFile = File(...),
     embedding_provider: Optional[str] = Query(None, description="google or ollama"),
-    strategy: Optional[str] = Query("docling", description="docling or pypdf"),
 ):
-    """Upload a PDF, extract text, chunk and index into the vector database."""
+    """Upload PDF, extract text, chunk, and index into hierarchical vector DB."""
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    provider = embedding_provider or settings.llm.provider
-    logger.info(f"Starting ingestion for {file.filename} using {provider} embeddings")
+    logger.info(f"Starting document ingestion: {file.filename}")
 
-    # 1. Save uploaded file to temp
+    # 1. Lưu file tạm thời
     with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = Path(tmp.name)
 
     try:
-        # 2. Process PDF
-        engine = PDFEngine()
-        extraction_result = engine.process_pdf(tmp_path)
-
-        if extraction_result.get("status") == "error":
-            raise HTTPException(status_code=500, detail="PDF processing failed.")
-
-        content = extraction_result["content"]
-        metadata_source = extraction_result["metadata"]
-
-        # 3. Chunking
-        chunker = Chunker()
-        # use the extraction source to guide chunking strategy if pypdf was used
-        chunks = chunker.chunk(
-            purpose=metadata_source if strategy == "pypdf" else strategy, docs=content
-        )
-
-        # 4. Vector DB Ingestion
-        factory = EmbeddingFactory()
-        embedding_model = factory.get_embedding(provider=provider)
-
-        db_manager = VectorDBManager(embedding_model=embedding_model)
-        ids = db_manager.add_documents(
-            chunks, collection_name=settings.system_paths.collection_name
-        )
-
-        # 5. Generate and save summary
-        summary = await generate_initial_summary(chunks, settings.llm.provider)
-        db_manager.save_summary(settings.system_paths.collection_name, summary)
-
-        return IngestResponse(
-            status="success",
-            filename=file.filename,
-            chunks_count=len(ids),
-            collection=settings.system_paths.collection_name,
-            summary=summary,
-        )
+    # 2. Use Orchestrator for processing
+        orchestrator = IngestionOrchestrator(provider=embedding_provider)
+        result = await orchestrator.ingest_pdf(tmp_path, embedding_provider=embedding_provider)
+        
+        return IngestResponse(**result)
 
     except Exception as e:
         logger.error(f"Ingestion error: {e}")
@@ -139,44 +91,44 @@ async def ingest_document(
         if tmp_path.exists():
             tmp_path.unlink()
 
-
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """Submit a question to the agentic Hierarchical RAG pipeline."""
-    logger.info(f"Received question: {request.question}")
+    """Send query to Agentic Hierarchical RAG pipeline."""
+    # Initialize settings for this session
+    llm_provider = request.llm_provider or settings.llm.provider
+    embedding_provider = request.embedding_provider or settings.llm.provider
+    
+    LLLMFactory.configure_llama_index_settings(provider=llm_provider)
+    
+    logger.info(f"Received question: {request.question} (LLM: {llm_provider})")
 
-    # Auto-load summary if not provided
     input_data = request.input_data_summary or ""
     content_summary = ""
 
+    # If no input_data_summary, try loading from storage
     if not input_data:
-        # Try to load saved summary from DB
         factory = EmbeddingFactory()
-        provider = request.embedding_provider or settings.llm.provider
-        embedding_model = factory.get_embedding(provider=provider)
-        db_manager = VectorDBManager(embedding_model=embedding_model)
+        embedding_model = factory.get_embedding(provider=embedding_provider)
+        db_manager = VectorDBManager(embedding_model=embedding_model, provider=embedding_provider)
 
         content_summary = db_manager.get_summary(settings.system_paths.collection_name)
         if content_summary:
-            logger.info(
-                f"Loaded persistent summary for {settings.system_paths.collection_name}"
-            )
+            logger.info(f"Loaded summary from storage for {embedding_provider}")
 
-    # Initialize state
+    # Initialize graph state
     initial_state = {
         "question": request.question,
         "input_data": input_data,
         "content_summary": content_summary,
-        "llm_provider": request.llm_provider or settings.llm.provider,
-        "embedding_provider": request.embedding_provider or settings.llm.provider,
+        "llm_provider": llm_provider,
+        "embedding_provider": embedding_provider,
         "sub_task_answers": [],
         "all_context": [],
         "current_task_index": 0,
     }
 
     try:
-        # Run graph
-        # Note: In a production app, you might want to use graph.astream for real-time progress
+        # Execute workflow graph
         result = await graph.ainvoke(initial_state)
 
         return {
@@ -186,51 +138,30 @@ async def chat(request: ChatRequest):
             "is_ambiguous": result.get("is_ambiguous", False),
             "sub_tasks": result.get("sub_tasks", []),
             "meta": {
-                "llm": request.llm_provider or settings.llm.provider,
-                "embedding": request.embedding_provider or settings.llm.provider,
+                "llm": llm_provider,
+                "embedding": embedding_provider,
+                "engine": "LlamaIndex AutoMerging"
             },
         }
     except Exception as e:
         logger.error(f"Graph execution error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.delete("/clear")
-async def clear_collection(
-    collection_name: Optional[str] = Query(None),
-    embedding_provider: Optional[str] = Query(None)
-):
-    """Wipe a specific collection in the vector database."""
-    name = collection_name or settings.system_paths.collection_name
-    provider = embedding_provider or settings.llm.provider
-    
-    factory = EmbeddingFactory()
-    embeddings = factory.get_embedding(provider=provider)
-    db_manager = VectorDBManager(embedding_model=embeddings)
-    
-    db_manager.delete_collection(collection_name=name)
-    return {"status": "success", "message": f"Collection '{name}' deleted."}
-
-
 @app.delete("/reset")
-async def reset_database():
-    """Physically delete the entire vector database directory and all metadata.
-    
-    Use this if you encounter dimensionality mismatch errors or want a clean slate.
-    """
-    # We can use any embedding model for reset since it just deletes files
+async def reset_database(
+    embedding_provider: Optional[str] = Query(None, description="google or ollama")
+):
+    """Clear vector database for a specific provider."""
+    provider = embedding_provider or settings.llm.provider
     factory = EmbeddingFactory()
-    embeddings = factory.get_embedding(provider="ollama") 
-    db_manager = VectorDBManager(embedding_model=embeddings)
+    embeddings = factory.get_embedding(provider=provider) 
+    db_manager = VectorDBManager(embedding_model=embeddings, provider=provider)
     
-    success = db_manager.reset_db()
-    if success:
-        return {"status": "success", "message": "Vector database directory physically deleted."}
+    if db_manager.reset_db():
+        return {"status": "success", "message": f"Data for {provider} has been cleared."}
     else:
-        raise HTTPException(status_code=500, detail="Failed to reset database directory.")
-
+        raise HTTPException(status_code=500, detail="Failed to clear data.")
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

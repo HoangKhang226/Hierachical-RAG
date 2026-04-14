@@ -5,6 +5,7 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions
 from pathlib import Path
 import shutil
 import pypdf
+from llama_index.core import Document as LlamaDocument
 
 
 class PDFEngine:
@@ -71,8 +72,8 @@ class PDFEngine:
             logger.error(f"Failed to extract text with pypdf: {e}")
             return ""
 
-    def process_pdf(self, pdf_path: Path):
-        """Convert a PDF file to Markdown using Docling, with pypdf as fallback.
+    def process_pdf(self, pdf_path: Path) -> LlamaDocument:
+        """Convert a PDF file to a LlamaIndex Document using Docling, with pypdf as fallback.
 
         The source file is first copied to a safe temp path to prevent issues
         with non-ASCII filenames. The temp file is removed after processing.
@@ -81,10 +82,8 @@ class PDFEngine:
             pdf_path: Path to the source PDF file.
 
         Returns:
-            A dict with keys:
-              - "content" (str): Extracted/converted text content.
-              - "metadata" (str): "docling" if Docling succeeded, "pypdf" otherwise.
-            On error, returns {"status": "error", "text": ""}.
+            A llama_index.core.Document object.
+            On error, returns an empty Document with error metadata.
 
         Raises:
             FileNotFoundError: If the PDF file does not exist.
@@ -104,10 +103,14 @@ class PDFEngine:
                     f"Docling conversion successful — {len(markdown_content)} chars extracted"
                 )
                 safe_path.unlink(missing_ok=True)
-                return {
-                    "content": markdown_content,
-                    "metadata": "docling",
-                }
+                return LlamaDocument(
+                    text=markdown_content,
+                    metadata={
+                        "source": pdf_path.name,
+                        "method": "docling",
+                        "status": "success",
+                    },
+                )
 
             else:
                 # Docling conversion failed; fall back to basic pypdf text extraction
@@ -116,12 +119,23 @@ class PDFEngine:
                 )
                 text = self.extract_text_with_pypdf(safe_path)
                 safe_path.unlink(missing_ok=True)
-                return {
-                    "content": text,
-                    "metadata": "pypdf",
-                }
+                return LlamaDocument(
+                    text=text,
+                    metadata={
+                        "source": pdf_path.name,
+                        "method": "pypdf",
+                        "status": "success",
+                    },
+                )
 
         except Exception as e:
             logger.error(f"Unexpected error while processing PDF '{pdf_path.name}': {e}")
             safe_path.unlink(missing_ok=True)
-            return {"status": "error", "text": ""}
+            return LlamaDocument(
+                text="",
+                metadata={
+                    "source": pdf_path.name,
+                    "status": "error",
+                    "error": str(e),
+                },
+            )

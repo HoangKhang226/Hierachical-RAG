@@ -24,11 +24,11 @@ class AmbiguityCheckOutput(BaseModel):
     """Schema for Node 1 — Ambiguity Checker."""
 
     is_ambiguous: bool = Field(
-        description="True nếu câu hỏi mơ hồ hoặc thiếu thông tin đối chiếu, False nếu câu hỏi rõ ràng."
+        description="True if the question is ambiguous or lacks reference info, False if clear."
     )
     reason: str = Field(
         default="",
-        description="Giải thích lý do tại sao câu hỏi được đánh giá là mơ hồ hoặc rõ ràng dựa trên quy tắc.",
+        description="Explain why the question is judged as ambiguous or clear based on rules.",
     )
 
 
@@ -36,7 +36,7 @@ class PlannerOutput(BaseModel):
     """Schema for Node 2 — Planner."""
 
     sub_tasks: List[str] = Field(
-        description="Danh sách từ 1 đến 5 nhiệm vụ con được phân tách từ câu hỏi gốc.",
+        description="List of 1 to 5 sub-tasks decomposed from the original question.",
     )
 
 
@@ -44,7 +44,7 @@ class KnowledgeRouterOutput(BaseModel):
     """Schema for Node 3 — Knowledge Router."""
 
     route: Literal["rag", "web", "llm_knowledge"] = Field(
-        description="Nguồn dữ liệu phù hợp nhất để xử lý nhiệm vụ (rag, web, hoặc llm_knowledge)."
+        description="Most suitable data source for the task (rag, web, or llm_knowledge)."
     )
 
 
@@ -52,15 +52,15 @@ class ValidatorOutput(BaseModel):
     """Schema for Node 6 — Validator."""
 
     score: float = Field(
-        description="Điểm số đánh giá mức độ bao phủ thông tin từ 0.0 đến 1.0",
+        description="Information coverage score from 0.0 to 1.0.",
         ge=0.0,
         le=1.0,
     )
     is_valid: bool = Field(
-        description="True nếu score >= 0.7 (ĐẠT), False nếu score < 0.7 (CHƯA ĐẠT)."
+        description="True if score >= 0.7 (PASS), False otherwise."
     )
     reason: str = Field(
-        description="Phân tích chi tiết: các thực thể quan trọng là gì và chúng có xuất hiện trong context hay không."
+        description="Detailed analysis: identify key entities and their presence in context."
     )
 
 
@@ -176,7 +176,7 @@ def validator(state: AgentState) -> dict:
     structured_llm = client.get_structed_llm(ValidatorOutput)
     result: ValidatorOutput = structured_llm.invoke(prompt)
     return {
-        "is_context_valid": result.is_valid,
+        "is_context_valid": result.score >= 0.7,
         "validation_score": result.score,
     }
 
@@ -190,8 +190,13 @@ def global_summary(state: AgentState) -> dict:
     provider = state.get("llm_provider")
     client = LLLMFactory.create_client("summary", provider=provider)
     
+    # Prepare inputs for the prompt
+    sub_tasks_context = "\n\n".join(state.get("sub_task_answers", []))
+    if not sub_tasks_context:
+        sub_tasks_context = "(No specific sub-task findings available)"
+
     prompt = GLOBAL_SUMMARY_PROMPT.format(
-        documents="\n\n".join(state.get("sub_task_answers", [])),
+        documents=sub_tasks_context
     )
     response = client.get_llm().invoke(prompt)
     return {"global_summary": response.content}

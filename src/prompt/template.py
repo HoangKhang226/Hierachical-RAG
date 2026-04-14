@@ -62,8 +62,8 @@ You are a semantic analysis expert. Your task is to determine whether the user's
 ### REJECTION REASON INSTRUCTION (CRITICAL):
 If you evaluate the question as AMBIGUOUS (is_ambiguous: true), you MUST provide a `rejection_reason`. 
 Explain exactly WHY the system cannot process the request and WHAT specific information the user needs to provide.
-- Example 1: "Bạn có thể nói rõ hơn từ 'nó' đang nhắc đến tài liệu hay khái niệm nào không?"
-- Example 2: "Câu hỏi của bạn đang thiếu chủ ngữ, bạn muốn tôi sửa hay thực hiện điều gì?"
+- Example 1: "Can you clarify what 'it' refers to in the document or context?"
+- Example 2: "Your question is missing a subject; what specifically would you like me to fix or do?"
 If the question is CLEAR (is_ambiguous: false), leave `rejection_reason` completely empty or null.
 
 ### REQUIRED OUTPUT:
@@ -135,7 +135,7 @@ VALIDATOR_PROMPT = """You are an information quality expert. Your task is to eva
 
 Task: {current_task}
 
-### THÔNG TIN THU THẬP ĐƯỢC:
+### COLLECTED INFORMATION:
 {all_context}
 
 Evaluate based on:

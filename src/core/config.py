@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(..., alias="TAVILY_API_KEY")
     langsmith_api_key: str = Field(..., alias="LANGSMITH_API_KEY")
 
+    app: AppConfig
     llm: LLMConfig
     ollama: OllamaConfig
     embedding: EmbeddingConfig
