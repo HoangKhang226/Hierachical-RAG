@@ -180,5 +180,3 @@ Because the system uses **Local Ollama** for Memory and Fact Extraction by defau
 ├── main.py             # FastAPI entry point
 └── requirements.txt    # Project dependencies
 ```
-
-# H i e r a c h i c a l - L o c a l
