@@ -14,10 +14,15 @@ class LLMConfig(BaseModel):
     """Configuration for language model selection and sampling parameters."""
 
     provider: str = "ollama"  # "gemini" | "ollama"
-    summary_model: str
-    rag_model: str
     rag_reranker_model: str
     temperature: float
+
+
+class GeminiConfig(BaseModel):
+    """Configuration for Google Gemini models."""
+
+    summary_model: str = "gemini-2.5-flash"
+    rag_model: str = "gemini-2.5-flash"
 
 
 class OllamaConfig(BaseModel):
@@ -26,7 +31,7 @@ class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:11434"
     summary_model: str = "qwen3:8b"
     rag_model: str = "qwen3:8b"
-
+    embed_model: str = "nomic-embed-text"
 
 class EmbeddingConfig(BaseModel):
     """Configuration for the embedding model used in vector retrieval."""
@@ -62,6 +67,13 @@ class PathConfig(BaseModel):
     collection_name: str
 
 
+class MemoryConfig(BaseModel):
+    """Configuration for Mem0 long-term user memory storage."""
+
+    chroma_path: str = "storage/mem0_chroma"
+    history_db_path: str = "storage/mem0_history.db"
+
+
 class LangsmithConfig(BaseModel):
     """LangSmith tracing project settings."""
 
@@ -91,11 +103,13 @@ class Settings(BaseSettings):
 
     app: AppConfig
     llm: LLMConfig
+    gemini: GeminiConfig = GeminiConfig()
     ollama: OllamaConfig
     embedding: EmbeddingConfig
     retrieval: RetrievalConfig
     chunking: ChunkingConfig
     system_paths: PathConfig
+    memory: MemoryConfig = MemoryConfig()
     langsmith: LangsmithConfig
 
     model_config = SettingsConfigDict(

@@ -82,7 +82,7 @@ def _format_subtask_report(current_task: str, result: str, source: str) -> str:
 
 def route_after_ambiguity(state: AgentState) -> str:
     if state.get("is_ambiguous", False):
-        return END
+        return "rejection_handler"
     return "planner"
 
 

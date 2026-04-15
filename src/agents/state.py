@@ -68,6 +68,16 @@ class AgentState(TypedDict):
     requires a web search. Updated by the summarizer after each run."""
 
     # ------------------------------------------------------------------
+    # Memory — per-user long-term context via Mem0
+    # ------------------------------------------------------------------
+
+    user_id: Annotated[str, override]
+    """User identifier for per-user memory. Defaults to 'guest'."""
+
+    user_memory: Annotated[str, override]
+    """Facts retrieved from Mem0 about the user, injected into prompts."""
+
+    # ------------------------------------------------------------------
     # Node 1 — Ambiguity Checker (AmbiguityCheckOutput)
     # ------------------------------------------------------------------
 

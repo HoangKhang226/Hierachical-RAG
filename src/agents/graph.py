@@ -44,6 +44,13 @@ from src.agents.node import (
     validator,
     global_summary,
     synthesizer,
+    rejection_handler,
+)
+
+# Memory nodes
+from src.agents.memory_nodes import (
+    retrieve_memory_node,
+    update_memory_node,
 )
 
 # Routing helpers and retrieval tools
@@ -108,6 +115,11 @@ def build_subtask_subgraph():
 def build_graph():
     """Assemble and compile the top-level Hierarchical RAG graph.
 
+    Flow:
+        START → retrieve_memory → context_compressor → ambiguity_checker
+              → planner → [subtask_runner × N] → global_summary
+              → synthesizer → update_memory → END
+
     Returns:
         A compiled LangGraph StateGraph ready for invocation.
     """
@@ -115,21 +127,31 @@ def build_graph():
 
     g = StateGraph(AgentState)
 
+    # Memory nodes
+    g.add_node("retrieve_memory", retrieve_memory_node)
+    g.add_node("update_memory", update_memory_node)
+
+    # Pipeline nodes
     g.add_node("context_compressor", context_compressor)
     g.add_node("ambiguity_checker", ambiguity_checker)
     g.add_node("planner", planner)
     g.add_node("subtask_runner", subtask_subgraph)
     g.add_node("global_summary", global_summary)
     g.add_node("synthesizer", synthesizer)
+    g.add_node("rejection_handler", rejection_handler)
 
-    g.set_entry_point("context_compressor")
+    # --- Edge wiring ---
+    g.set_entry_point("retrieve_memory")
+    g.add_edge("retrieve_memory", "context_compressor")
     g.add_edge("context_compressor", "ambiguity_checker")
 
     g.add_conditional_edges(
         "ambiguity_checker",
         route_after_ambiguity,
-        {"planner": "planner", END: END},
+        {"planner": "planner", "rejection_handler": "rejection_handler"},
     )
+
+    g.add_edge("rejection_handler", "update_memory")
 
     # Fan-out: each sub-task runs subtask_runner in parallel
     g.add_conditional_edges("planner", fan_out_subtasks, ["subtask_runner"])
@@ -137,7 +159,8 @@ def build_graph():
     # Fan-in: all branches meet at global_summary
     g.add_edge("subtask_runner", "global_summary")
     g.add_edge("global_summary", "synthesizer")
-    g.add_edge("synthesizer", END)
+    g.add_edge("synthesizer", "update_memory")
+    g.add_edge("update_memory", END)
 
     return g.compile()
 

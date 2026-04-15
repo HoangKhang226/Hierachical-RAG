@@ -55,7 +55,7 @@ class LLLMFactory:
         if purpose == "summary":
             temperature = settings.llm.temperature
             if provider == "gemini":
-                model = settings.llm.summary_model
+                model = settings.gemini.summary_model
                 logger.debug(
                     f"Creating Gemini LLM for SUMMARY (model: {model}, temp: {temperature})"
                 )
@@ -73,7 +73,7 @@ class LLLMFactory:
             # Both tasks require deterministic output — force temperature to 0
             temperature = 0.0
             if provider == "gemini":
-                model = settings.llm.rag_model
+                model = settings.gemini.rag_model
                 logger.debug(
                     f"Creating Gemini LLM for {purpose.upper()} (model: {model}, temp: {temperature})"
                 )
@@ -112,7 +112,7 @@ class LLLMFactory:
             from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
             
             Settings.llm = GoogleGenAI(
-                model=settings.llm.rag_model,
+                model=settings.gemini.rag_model,
                 api_key=settings.google_api_key
             )
             Settings.embed_model = GoogleGenAIEmbedding(

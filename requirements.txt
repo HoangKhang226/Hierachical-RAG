@@ -29,3 +29,6 @@ llama-index-llms-ollama
 fastapi
 uvicorn
 python-multipart
+
+# Memory
+mem0ai

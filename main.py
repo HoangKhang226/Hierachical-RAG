@@ -33,6 +33,7 @@ async def startup_event():
 # --- Models ---
 class ChatRequest(BaseModel):
     question: str
+    user_id: Optional[str] = "guest"
     llm_provider: Optional[str] = None
     embedding_provider: Optional[str] = None
     input_data_summary: Optional[str] = ""
@@ -118,6 +119,7 @@ async def chat(request: ChatRequest):
     # Initialize graph state
     initial_state = {
         "question": request.question,
+        "user_id": request.user_id or "guest",
         "input_data": input_data,
         "content_summary": content_summary,
         "llm_provider": llm_provider,
@@ -140,6 +142,7 @@ async def chat(request: ChatRequest):
             "meta": {
                 "llm": llm_provider,
                 "embedding": embedding_provider,
+                "user_id": request.user_id or "guest",
                 "engine": "LlamaIndex AutoMerging"
             },
         }

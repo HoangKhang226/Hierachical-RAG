@@ -11,6 +11,15 @@ because this system is designed to process Vietnamese documents and questions.
 """
 
 # ============================================================
+# Reusable Memory Section — conditionally injected by nodes
+# ============================================================
+USER_MEMORY_SECTION = """### USER MEMORY (from past conversations):
+The following facts are known about the current user. Use them to personalize
+your response, resolve ambiguous references, and improve routing decisions.
+{user_memory}
+"""
+
+# ============================================================
 # Node 0: Context Compression
 # [Output schema: ContextCompressionOutput]
 # ============================================================
@@ -41,33 +50,33 @@ Generate the compressed context based on the rules above. Answer in the same lan
 # [Output schema: AmbiguityCheckOutput]
 # ============================================================
 AMBIGUITY_CHECK_PROMPT = """
-You are a semantic analysis expert. Your task is to determine whether the user's question contains enough information to perform a specific action.
+You are a context-aware semantic analysis expert. Your task is to determine whether the user's question contains enough context to be processed reliably.
 
-### EVALUATION RULES:
+### CONTEXT:
+1. USER IDENTITY/MEMORY:
+{user_memory_section}
 
-1. EVALUATE AS CLEAR (is_ambiguous: false) WHEN:
-   - The question is self-sufficient and meaningful on its own.
-   - Or the question contains substitute pronouns/referents (it, this, author, this content, summarize for me...) AND there is corresponding information in the "Document summary" to map to.
-   - Example: "Who is he?" when the Document summary is about "Steve Jobs".
+2. DOCUMENT SUMMARY (Internal Knowledge Base):
+{content_summary}
 
-2. EVALUATE AS AMBIGUOUS (is_ambiguous: true) WHEN:
-   - The question uses substitute pronouns (it, they, that...) but the "Document summary" is empty or does not contain the corresponding subject.
-   - The question consists of exclamations or single words without a clear purpose (Example: "Great", "Why?", "Really").
-   - The question requests an action but the target cannot be identified (Example: "Fix it for me" - fix what?).
+### EVALUATION HIERARCHY (Priority-based):
 
-### INPUT DATA:
-- User's question: {question}
-- Current document summary: {content_summary} (Note: If this field is empty, it means the user has not provided any context/file).
+- RULE 1 (HIGH PRIORITY): If the question matches or refers to information in the **USER IDENTITY/MEMORY** (e.g., "What is my name?", "What do I like?") -> EVALUATE AS CLEAR (is_ambiguous: false).
+- RULE 2: If the question matches or refers to the **DOCUMENT SUMMARY** or its entities -> EVALUATE AS CLEAR (is_ambiguous: false).
+- RULE 3: If the question is a **greeting, self-introduction, or general social interaction** (e.g., "Hello", "Chào bạn", "Tôi là Khang") -> EVALUATE AS CLEAR (is_ambiguous: false).
+- RULE 4: If the question is a self-contained general knowledge query -> EVALUATE AS CLEAR (is_ambiguous: false).
 
-### REJECTION REASON INSTRUCTION (CRITICAL):
-If you evaluate the question as AMBIGUOUS (is_ambiguous: true), you MUST provide a `rejection_reason`. 
-Explain exactly WHY the system cannot process the request and WHAT specific information the user needs to provide.
-- Example 1: "Can you clarify what 'it' refers to in the document or context?"
-- Example 2: "Your question is missing a subject; what specifically would you like me to fix or do?"
-If the question is CLEAR (is_ambiguous: false), leave `rejection_reason` completely empty or null.
+### AMBIGUITY RULE:
+- EVALUATE AS AMBIGUOUS (is_ambiguous: true) ONLY IF: The question uses vague pronouns (it, they, the author...) AND neither the User Memory nor the Document Summary provides a clear referent.
+
+### REJECTION REASON:
+If is_ambiguous is true, provide a polite and helpful explanation in Vietnamese.
+- Example: "Tôi không rõ 'nó' mà bạn đề cập là gì. Bạn có thể nói rõ hơn về vấn đề trong tài liệu không?"
+
+USER QUESTION: {question}
 
 ### REQUIRED OUTPUT:
-Based on the defined Schema, please analyze and return the result.
+Analyze based on the Priority Hierarchy and return the JSON schema response.
 """
 # ============================================================
 # Node 2: Planner (Sub-task Decomposer)
@@ -75,11 +84,12 @@ Based on the defined Schema, please analyze and return the result.
 # ============================================================
 PLANNER_PROMPT = """You are an expert analyst and planner. Your task is to break down a complex question into smaller sub-tasks, each of which can be processed independently.
 
-Rules:
+{user_memory_section}Rules:
 1. If the question is simple, create only 1 sub-task (the original question itself).
 2. If the question is complex or multi-part, split into 2-4 sub-tasks.
 3. Each sub-task must be self-contained — understandable without reading the other tasks.
 4. Do not over-split — each sub-task should have independent meaning.
+5. If user memory provides relevant context, incorporate it into the sub-tasks.
 
 Question: {question}
 
@@ -157,7 +167,7 @@ SYNTHESIZER_PROMPT = """You are an information synthesis expert. Your task is to
 
 Original question: {question}
 
-=== COLLECTED INFORMATION ===
+{user_memory_section}=== COLLECTED INFORMATION ===
 {all_context}
 === END ===
 
@@ -168,6 +178,7 @@ Rules:
 4. Answer in the language of the question (Vietnamese or English).
 5. If information is insufficient, clearly state which parts cannot be answered.
 6. Cite sources where possible.
+7. If user memory is available, use it to personalize the answer and address the user appropriately.
 
 Answer:"""
 
