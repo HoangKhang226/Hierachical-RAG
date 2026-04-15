@@ -2,9 +2,9 @@
 FROM python:3.11-slim
 
 # Set environment variables for Python optimization
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV PYTHONPATH /app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 # Set working directory
 WORKDIR /app

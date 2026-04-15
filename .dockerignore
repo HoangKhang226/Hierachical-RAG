@@ -1,0 +1,32 @@
+# Build context exclusions
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Persistence and Logs
+storage/
+logs/
+scratch/
+notebook/
+data/
+
+# Environment and Secrets
+.env
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore

@@ -20,7 +20,7 @@ class Retriever():
         k: int = settings.retrieval.top_k,
     ):
         logger.info(f"đang tìm kiếm bằng hyde: {hyde}")
-        retriever = self.vector_db.get_retriever(collection_name=collection_name, k=k)
+        retriever = self.vector_db.get_retriever(collection_name=collection_name, similarity_top_k=k)
         try:
             docs = retriever.retrieve(hyde)
             logger.info(f"Tìm thấy {len(docs)} tài liệu liên quan.")

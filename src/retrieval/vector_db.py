@@ -8,7 +8,7 @@ import os
 import gc
 from llama_index.core import StorageContext, VectorStoreIndex, load_index_from_storage
 from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.core.retrievers import RecursiveRetriever
+from llama_index.core.retrievers import AutoMergingRetriever
 
 class VectorDBManager:
     def __init__(self, embedding_model, provider: str = "ollama"):
@@ -28,7 +28,7 @@ class VectorDBManager:
     def db_client(self):
         """Initialize and return the ChromaDB client on demand."""
         if self._db_client is None:
-            self._db_client = chromadb.PersistentClient(path=str(self.persist_directory))
+            self._db_client = chromadb.PersistentClient(path=str(self.persist_directory)) # initial persistent memory
         return self._db_client
 
     def _get_storage_context(self, collection_name: str):
@@ -69,7 +69,9 @@ class VectorDBManager:
             gc.collect() # Force garbage collection to release file locks
 
             if self.persist_directory.exists():
-                shutil.rmtree(self.persist_directory, ignore_errors=True)
+                shutil.rmtree(self.persist_directory,
+                ignore_errors=True # nếu file không xóa được sẽ bỏ qua
+                )
                 logger.info(f"🧹 Cleaned up storage directory: {self.persist_directory}")
             
             self.persist_directory.mkdir(parents=True, exist_ok=True)
@@ -152,32 +154,26 @@ class VectorDBManager:
         collection_name: str = "default_collection",
         **kwargs,
     ):
-        """Return a RecursiveRetriever that traverses from leaf nodes to parent nodes."""
+        """Return an AutoMergingRetriever that automatically merges retrieved child nodes into parents."""
         index = self.get_index(collection_name)
 
         if index is None:
             logger.error("❌ Cannot obtain retriever because the index is empty.")
             return None
 
-        # 1. Fetch all nodes from the docstore to build a lookup mapping
-        all_nodes = list(index.storage_context.docstore.docs.values())
-        nodes_dict = {node.node_id: node for node in all_nodes}
-
-        # 2. Base retriever for leaf node matching
+        # 1. Base retriever for leaf node matching
         vector_retriever = index.as_retriever(similarity_top_k=similarity_top_k, **kwargs)
 
-        # 3. Configure RecursiveRetriever with both the vector retriever and nodes mapping
-        logger.info("Initializing optimized RecursiveRetriever with docstore node mapping...")
-        recursive_retriever = RecursiveRetriever(
-            "vector",
-            retriever_dict={
-                "vector": vector_retriever,
-                **nodes_dict
-            },
+        # 2. Use AutoMergingRetriever with the existing storage context
+        # This will automatically handle the mapping using the docstore in storage_context
+        logger.info("Initializing AutoMergingRetriever...")
+        retriever = AutoMergingRetriever(
+            vector_retriever,
+            index.storage_context,
             verbose=True
         )
 
-        return recursive_retriever
+        return retriever
 
     def save_summary(self, collection_name: str, summary: str):
         """Append or update a document summary in the metadata storage."""
